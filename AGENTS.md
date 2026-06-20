@@ -19,18 +19,20 @@ The current scaffold is Kotlin + Jetpack Compose + Room, with placeholders and w
 The app should support:
 
 - Photo-first inventory management
-- One primary photo plus supplemental images per item
+- One primary photo plus supplemental images per item with full-screen zoom
 - Metadata fields for:
+  - unique 12-char UID
   - name / description
   - estimated value and currency
   - acquisition date
   - room / container location
   - category tags
 - Fast search by name, location, or tag
+- Image-based semantic search with camera/gallery support
 - Location-based filtering
 - Offline operation with no third-party server dependency
 - Local storage of images in app-private internal storage
-- Encrypted backup export
+- Encrypted portable backup export (Password-protected)
 
 ## Current Architecture
 
@@ -44,6 +46,7 @@ The app should support:
 
 - `app/src/main/java/com/inventorymanager/app/data/local/`
   - Room database, entities, DAOs, and repository
+  - Support for schema migrations (e.g., adding UID)
   - Inventory metadata is the source of truth
 
 - `app/src/main/java/com/inventorymanager/app/data/media/ImageStorageManager.kt`
@@ -52,11 +55,12 @@ The app should support:
 
 - `app/src/main/java/com/inventorymanager/app/data/security/`
   - Handles biometric unlock gating
-  - Packages and encrypts backup exports into Downloads
+  - Packages and encrypts portable backups (PBKDF2 + AES-256)
 
 - `app/src/main/java/com/inventorymanager/app/ui/`
   - Compose UI for inventory list and editor
   - ViewModel owns query state, editor state, and save flow
+  - Full-screen lightbox zoom for images
 
 ## Important Files
 

@@ -164,26 +164,56 @@ class BackupManager(
 
     private fun decryptFile(input: File, output: File, password: String) {
         FileInputStream(input).use { fileIn ->
-            val magic = ByteArray(MAGIC.size)
-            fileIn.read(magic)
-            if (!magic.contentEquals(MAGIC)) error("Invalid backup file format")
-
-            val ivSize = fileIn.read()
-            val iv = ByteArray(ivSize)
-            fileIn.read(iv)
-
-            val saltSize = fileIn.read()
-            val salt = ByteArray(saltSize)
-            fileIn.read(salt)
-
-            val key = deriveKey(password, salt)
-            val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
-
-            javax.crypto.CipherInputStream(fileIn, cipher).use { cipherIn ->
-                FileOutputStream(output).use { fileOut ->
-                    cipherIn.copyTo(fileOut)
+            val header = ByteArray(MAGIC.size)
+            fileIn.read(header)
+            
+            // Check magic prefix (IMBK)
+            if (header.size < 4 || header[0] != 'I'.code.toByte() || header[1] != 'M'.code.toByte() || 
+                header[2] != 'B'.code.toByte() || header[3] != 'K'.code.toByte()) {
+                error("Invalid backup file format")
+            }
+            
+            val version = header.lastOrNull()?.toInt() ?: 0
+            
+            if (version == 1) {
+                // Legacy device-bound Keystore encryption
+                val ivSize = fileIn.read()
+                val iv = ByteArray(ivSize)
+                fileIn.read(iv)
+                
+                val cipher = Cipher.getInstance(TRANSFORMATION)
+                val keyStore = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+                val key = keyStore.getKey("inventory_backup_key", null) as? SecretKey 
+                    ?: error("This backup was encrypted using a device-specific key. It can only be restored on the original device.")
+                
+                cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
+                
+                javax.crypto.CipherInputStream(fileIn, cipher).use { cipherIn ->
+                    FileOutputStream(output).use { fileOut ->
+                        cipherIn.copyTo(fileOut)
+                    }
                 }
+            } else if (version == 2) {
+                // New password-based encryption
+                val ivSize = fileIn.read()
+                val iv = ByteArray(ivSize)
+                fileIn.read(iv)
+
+                val saltSize = fileIn.read()
+                val salt = ByteArray(saltSize)
+                fileIn.read(salt)
+
+                val key = deriveKey(password, salt)
+                val cipher = Cipher.getInstance(TRANSFORMATION)
+                cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
+
+                javax.crypto.CipherInputStream(fileIn, cipher).use { cipherIn ->
+                    FileOutputStream(output).use { fileOut ->
+                        cipherIn.copyTo(fileOut)
+                    }
+                }
+            } else {
+                error("Unsupported backup version: $version")
             }
         }
     }

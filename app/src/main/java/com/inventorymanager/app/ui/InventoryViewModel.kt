@@ -116,6 +116,7 @@ class InventoryViewModel(
     fun startCreating() {
         editor.value = InventoryEditorState(
             isOpen = true,
+            uid = generateUid(),
             currencyCode = "INR",
             initialCurrencyCode = "INR",
         )
@@ -133,6 +134,7 @@ class InventoryViewModel(
         editor.value = InventoryEditorState(
             isOpen = true,
             itemId = item.item.id,
+            uid = item.item.uid,
             name = item.item.name,
             initialName = item.item.name,
             description = item.item.description,
@@ -208,6 +210,7 @@ class InventoryViewModel(
 
                 val item = InventoryItemEntity(
                     id = snapshot.itemId,
+                    uid = snapshot.uid,
                     name = snapshot.name.trim(),
                     description = snapshot.description.trim(),
                     estimatedValueCents = snapshot.estimatedValueText.toCentsOrNull(),
@@ -308,6 +311,8 @@ class InventoryViewModel(
     }
 }
 
+    private fun generateUid(): String = java.util.UUID.randomUUID().toString().uppercase().replace("-", "").take(12)
+
 private fun String.toCentsOrNull(): Long? {
     if (isBlank()) return null
     return runCatching {
@@ -350,6 +355,7 @@ data class InventoryEditorState(
     val isOpen: Boolean = false,
     val isSaving: Boolean = false,
     val itemId: Long = 0,
+    val uid: String = "",
     val name: String = "",
     val description: String = "",
     val estimatedValueText: String = "",

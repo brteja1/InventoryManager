@@ -526,13 +526,19 @@ private fun InventoryCard(
                     horizontalArrangement = Arrangement.SpaceBetween,
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    Text(
-                        item.item.name,
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        maxLines = 1,
-                        modifier = Modifier.weight(1f)
-                    )
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            item.item.name,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1,
+                        )
+                        Text(
+                            item.item.uid,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline,
+                        )
+                    }
                     if (score != null) {
                         val percentage = (score * 100).coerceIn(0f, 100f).toInt()
                         Text(
@@ -892,6 +898,13 @@ private fun InventoryEditorScreen(
                     )
                 }
             }
+
+            Text(
+                text = "ID: ${state.uid}",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.outline,
+                modifier = Modifier.padding(vertical = 4.dp)
+            )
 
             OutlinedTextField(
                 value = state.name,

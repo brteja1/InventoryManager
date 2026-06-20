@@ -16,6 +16,7 @@ class InventoryAppContainer(context: Context) {
             "inventory_manager.db",
         )
             .setJournalMode(androidx.room.RoomDatabase.JournalMode.TRUNCATE)
+            .addMigrations(InventoryDatabase.MIGRATION_3_4)
             .build()
 
     val inventoryRepository: InventoryRepository = InventoryRepository(database)

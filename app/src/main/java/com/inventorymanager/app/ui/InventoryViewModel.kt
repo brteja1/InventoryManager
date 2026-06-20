@@ -296,7 +296,10 @@ class InventoryViewModel(
         viewModelScope.launch {
             backup.value = backup.value.copy(isImporting = true, message = null)
             try {
-                backupManager.importEncryptedBackup(uri, password)
+                backupManager.importEncryptedBackup(uri, password) {
+                    repository.closeDatabase()
+                }
+                repository.triggerRefresh()
                 backup.value = backup.value.copy(
                     isImporting = false,
                     message = "Backup imported successfully.",

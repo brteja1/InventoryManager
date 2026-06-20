@@ -56,17 +56,29 @@ class BackupManager(
         }
     }
 
-    suspend fun importEncryptedBackup(uri: android.net.Uri, password: String) = withContext(Dispatchers.IO) {
+    suspend fun importEncryptedBackup(
+        uri: android.net.Uri,
+        password: String,
+        onPreImport: () -> Unit
+    ) = withContext(Dispatchers.IO) {
         val tempEncrypted = File.createTempFile("import_", ".enc", context.cacheDir)
         val tempZip = File.createTempFile("import_", ".zip", context.cacheDir)
+        val buffer = ByteArray(8192)
         try {
             context.contentResolver.openInputStream(uri)?.use { input ->
                 FileOutputStream(tempEncrypted).use { output ->
-                    input.copyTo(output)
+                    var bytesRead: Int
+                    while (input.read(buffer).also { bytesRead = it } != -1) {
+                        output.write(buffer, 0, bytesRead)
+                    }
                 }
             } ?: error("Unable to open backup file")
 
             decryptFile(tempEncrypted, tempZip, password)
+            
+            // Perform preparation (like closing the DB) before extraction
+            onPreImport()
+
             extractBackupZip(tempZip)
         } finally {
             tempEncrypted.delete()
@@ -100,8 +112,12 @@ class BackupManager(
 
     private fun addFile(zip: ZipOutputStream, file: File, entryName: String) {
         zip.putNextEntry(ZipEntry(entryName))
+        val buffer = ByteArray(8192)
         FileInputStream(file).use { input ->
-            input.copyTo(zip)
+            var bytesRead: Int
+            while (input.read(buffer).also { bytesRead = it } != -1) {
+                zip.write(buffer, 0, bytesRead)
+            }
         }
         zip.closeEntry()
     }
@@ -155,14 +171,19 @@ class BackupManager(
         output.write(salt.size)
         output.write(salt)
 
+        val buffer = ByteArray(8192)
         CipherOutputStream(output, cipher).use { cipherOut ->
             FileInputStream(input).use { fileIn ->
-                fileIn.copyTo(cipherOut)
+                var bytesRead: Int
+                while (fileIn.read(buffer).also { bytesRead = it } != -1) {
+                    cipherOut.write(buffer, 0, bytesRead)
+                }
             }
         }
     }
 
     private fun decryptFile(input: File, output: File, password: String) {
+        val buffer = ByteArray(8192)
         FileInputStream(input).use { fileIn ->
             val header = ByteArray(MAGIC.size)
             fileIn.read(header)
@@ -190,7 +211,10 @@ class BackupManager(
                 
                 javax.crypto.CipherInputStream(fileIn, cipher).use { cipherIn ->
                     FileOutputStream(output).use { fileOut ->
-                        cipherIn.copyTo(fileOut)
+                        var bytesRead: Int
+                        while (cipherIn.read(buffer).also { bytesRead = it } != -1) {
+                            fileOut.write(buffer, 0, bytesRead)
+                        }
                     }
                 }
             } else if (version == 2) {
@@ -209,7 +233,10 @@ class BackupManager(
 
                 javax.crypto.CipherInputStream(fileIn, cipher).use { cipherIn ->
                     FileOutputStream(output).use { fileOut ->
-                        cipherIn.copyTo(fileOut)
+                        var bytesRead: Int
+                        while (cipherIn.read(buffer).also { bytesRead = it } != -1) {
+                            fileOut.write(buffer, 0, bytesRead)
+                        }
                     }
                 }
             } else {
@@ -226,6 +253,14 @@ class BackupManager(
     }
 
     private fun extractBackupZip(zipFile: File) {
+        // Clear existing images before extraction to avoid orphaned files
+        val imagesDir = File(context.filesDir, "inventory_images")
+        if (imagesDir.exists()) {
+            imagesDir.deleteRecursively()
+        }
+        imagesDir.mkdirs()
+
+        val buffer = ByteArray(8192)
         java.util.zip.ZipFile(zipFile).use { zip ->
             zip.entries().asSequence().forEach { entry ->
                 if (entry.name.startsWith("database/")) {
@@ -233,7 +268,10 @@ class BackupManager(
                     target.parentFile?.mkdirs()
                     zip.getInputStream(entry).use { input ->
                         FileOutputStream(target).use { output ->
-                            input.copyTo(output)
+                            var bytesRead: Int
+                            while (input.read(buffer).also { bytesRead = it } != -1) {
+                                output.write(buffer, 0, bytesRead)
+                            }
                         }
                     }
                 } else if (entry.name.startsWith("images/")) {
@@ -241,7 +279,10 @@ class BackupManager(
                     target.parentFile?.mkdirs()
                     zip.getInputStream(entry).use { input ->
                         FileOutputStream(target).use { output ->
-                            input.copyTo(output)
+                            var bytesRead: Int
+                            while (input.read(buffer).also { bytesRead = it } != -1) {
+                                output.write(buffer, 0, bytesRead)
+                            }
                         }
                     }
                 }

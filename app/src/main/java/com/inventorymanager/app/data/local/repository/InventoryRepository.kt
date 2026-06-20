@@ -1,23 +1,39 @@
 package com.inventorymanager.app.data.local.repository
 
+import com.inventorymanager.app.InventoryAppContainer
 import com.inventorymanager.app.data.local.InventoryDatabase
 import com.inventorymanager.app.data.local.entity.InventoryItemEntity
 import com.inventorymanager.app.data.local.entity.InventoryItemWithPhotos
 import com.inventorymanager.app.data.local.entity.InventoryPhotoEntity
 import androidx.room.withTransaction
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.flatMapLatest
 
 class InventoryRepository(
-    private val database: InventoryDatabase,
+    private val container: InventoryAppContainer,
 ) {
-    fun observeItems(query: String): Flow<List<InventoryItemWithPhotos>> {
-        val source = if (query.isBlank()) {
-            database.inventoryDao().observeAllItems()
-        } else {
-            database.inventoryDao().searchItems(query.trim())
-        }
+    private val refreshTrigger = MutableStateFlow(0)
 
-        return source
+    fun triggerRefresh() {
+        refreshTrigger.value++
+    }
+
+    private val database: InventoryDatabase get() = container.database
+
+    fun closeDatabase() {
+        container.closeDatabase()
+    }
+
+    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
+    fun observeItems(query: String): Flow<List<InventoryItemWithPhotos>> {
+        return refreshTrigger.flatMapLatest {
+            if (query.isBlank()) {
+                database.inventoryDao().observeAllItems()
+            } else {
+                database.inventoryDao().searchItems(query.trim())
+            }
+        }
     }
 
     suspend fun getItem(itemId: Long): InventoryItemWithPhotos? {

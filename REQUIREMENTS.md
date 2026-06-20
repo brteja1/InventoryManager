@@ -32,8 +32,11 @@
 ### Feature 4: Data Security & Backup
 - **Biometric Authentication**: Integration with Android BiometricPrompt for app launch protection. Quick-lock action available in the top app bar.
 - **Portable Password-Protected Backup**:
-    - **Export**: Package database and images into an encrypted `.zip.enc` file. Encryption is **password-based (PBKDF2 + AES-256)**, allowing backups to be restored on any device.
-    - **Import**: Restore the full database and image library. Supports both new password-protected backups and legacy device-bound backups for seamless transitions.
+    - **Export**: Package database and images into an encrypted `.zip.enc` file. Encryption uses **AES-256 in CBC mode** with PBKDF2 key derivation to ensure memory-efficient streaming even with large media libraries.
+    - **Import**: Restore database and image assets.
+        - **Memory-Efficient Streaming**: Decrypts and extracts data on-the-fly to handle large backups without exhausting device heap.
+        - **Smart Merge**: Imports new items and metadata while preserving existing local images (merging instead of destructive overwriting).
+        - **Backward Compatibility**: Supports legacy device-bound backups (v1) and early password-protected GCM formats (v2).
     - **Navigation Drawer**: Dedicated side menu for maintenance actions (Import/Export).
 
 ### Feature 5: Semantic Image Search
@@ -54,4 +57,4 @@
 - **UI**: Jetpack Compose (Material 3)
 - **Persistence**: Room Database (SQLite)
 - **Media**: CameraX, Coil, ImageStorageManager (WebP)
-- **Security**: Android KeyStore (AES/GCM), Biometric Library
+- **Security**: Android KeyStore, Biometric Library, AES/CBC (Streaming Backups), PBKDF2 Key Derivation

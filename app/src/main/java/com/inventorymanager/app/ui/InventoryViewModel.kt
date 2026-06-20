@@ -1,12 +1,17 @@
 package com.inventorymanager.app.ui
 
 import android.net.Uri
+import androidx.core.net.toUri
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.inventorymanager.app.data.local.entity.InventoryItemEntity
 import com.inventorymanager.app.data.local.entity.InventoryItemWithPhotos
 import com.inventorymanager.app.data.local.entity.InventoryPhotoEntity
+import com.inventorymanager.app.data.local.generateUid
+import com.inventorymanager.app.data.local.ifZero
 import com.inventorymanager.app.data.local.repository.InventoryRepository
+import com.inventorymanager.app.data.local.toCentsOrNull
+import com.inventorymanager.app.data.local.toEpochDayOrNull
 import com.inventorymanager.app.data.media.ImageEmbedderManager
 import com.inventorymanager.app.data.media.ImageStorageManager
 import com.inventorymanager.app.data.security.BackupManager
@@ -39,34 +44,32 @@ class InventoryViewModel(
     private val editor = MutableStateFlow(InventoryEditorState())
     private val backup = MutableStateFlow(BackupState())
 
-    @OptIn(ExperimentalCoroutinesApi::class)
-    private val items = combine(query, backup.map { it.isImporting }.distinctUntilChanged()) { q, importing ->
+    private val isImporting = backup.map { it.isImporting }.distinctUntilChanged()
+
+    private val items = combine(query, isImporting) { q, importing ->
         if (importing) flowOf(emptyList()) else repository.observeItems(q)
     }.flatMapLatest { it }
 
-    private val locations = backup.map { it.isImporting }.distinctUntilChanged().flatMapLatest { importing ->
-        if (importing) flowOf(emptyList()) else repository.observeUniqueLocations()
-    }
-
-    private val allContainers = backup.map { it.isImporting }.distinctUntilChanged().flatMapLatest { importing ->
-        if (importing) flowOf(emptyList()) else repository.observeUniqueContainers().map { list ->
-            list.map { it.locationName to it.containerName }
-        }
-    }
-
-    private val currencies = backup.map { it.isImporting }.distinctUntilChanged().flatMapLatest { importing ->
-        if (importing) flowOf(emptyList()) else repository.observeUniqueCurrencies()
-    }
-
-    private val tags = backup.map { it.isImporting }.distinctUntilChanged().flatMapLatest { importing ->
-        if (importing) flowOf(emptyList()) else repository.observeAllTags().map { list ->
-            list.asSequence()
-                .flatMap { it.split(",") }
-                .map { it.trim() }
-                .filter { it.isNotBlank() }
-                .distinct()
-                .sorted()
-                .toList()
+    private val filterData = isImporting.flatMapLatest { importing ->
+        if (importing) {
+            flowOf(FilterData(emptyList(), emptyList(), emptyList(), emptyList()))
+        } else {
+            combine(
+                repository.observeUniqueLocations(),
+                repository.observeUniqueContainers().map { list ->
+                    list.map { it.locationName to it.containerName }
+                },
+                repository.observeUniqueCurrencies(),
+                repository.observeAllTags().map { list ->
+                    list.asSequence()
+                        .flatMap { it.split(",") }
+                        .map { it.trim() }
+                        .filter { it.isNotBlank() }
+                        .distinct()
+                        .sorted()
+                        .toList()
+                }
+            ) { l, c, cu, t -> FilterData(l, c, cu, t) }
         }
     }
 
@@ -74,9 +77,7 @@ class InventoryViewModel(
         combine(
             combine(query, searchEmbedding, selectedLocation) { q, e, l -> Triple(q, e, l) },
             items,
-            combine(locations, allContainers, currencies, tags) { l, c, cu, t ->
-                FilterData(l, c, cu, t)
-            },
+            filterData,
             editor,
             backup
         ) { search, items, filters, editorState, backupState ->
@@ -95,11 +96,11 @@ class InventoryViewModel(
             }
 
             val filtered = items.filter { item ->
-                location == null || item.item.locationName == location
+                (location == null) || (item.item.locationName == location)
             }
 
             val finalItems: List<Pair<InventoryItemWithPhotos, Float?>> = if (embedding != null) {
-                filtered.map { item ->
+                filtered.asSequence().map { item ->
                     val similarity = item.item.imageEmbedding?.let { 
                         ImageEmbedderManager.cosineSimilarity(embedding, it)
                     } ?: 0.0f
@@ -107,6 +108,7 @@ class InventoryViewModel(
                 }
                 .filter { it.second >= 0.2f }
                 .sortedByDescending { it.second }
+                .toList()
             } else {
                 filtered.map { it to null }
             }
@@ -122,7 +124,7 @@ class InventoryViewModel(
                 items = finalItems,
                 editor = editorState,
                 isExportingBackup = backupState.isExporting,
-                isImportingBackup = backupState.isImporting,
+                isImportingBackup = false,
                 backupMessage = backupState.message,
             )
         }.stateIn(
@@ -150,10 +152,6 @@ class InventoryViewModel(
 
     fun clearImageSearch() {
         searchEmbedding.value = null
-    }
-
-    fun onLocationSelected(value: String?) {
-        selectedLocation.value = value
     }
 
     fun startCreating() {
@@ -238,15 +236,15 @@ class InventoryViewModel(
             editor.value = snapshot.copy(isSaving = true)
             try {
                 val savedPhotoPaths = mutableListOf<String>()
-                snapshot.photos.forEachIndexed { index, photo ->
-                    when (photo) {
-                        is InventoryEditorPhoto.Existing -> savedPhotoPaths += photo.path
+                snapshot.photos.forEach { photo ->
+                    savedPhotoPaths += when (photo) {
+                        is InventoryEditorPhoto.Existing -> photo.path
                         is InventoryEditorPhoto.Pending -> {
                             val destination = imageStorageManager.generatedImageFile(
                                 prefix = "item_${snapshot.itemId.ifZero(System.currentTimeMillis())}",
                             )
-                            imageStorageManager.saveUriAsWebp(Uri.parse(photo.uri), destination)
-                            savedPhotoPaths += destination.absolutePath
+                            imageStorageManager.saveUriAsWebp(photo.uri.toUri(), destination)
+                            destination.absolutePath
                         }
                     }
                 }
@@ -302,7 +300,7 @@ class InventoryViewModel(
             
             // Delete physical files
             pathsToDelete.forEach { path ->
-                runCatching { java.io.File(path).delete() }
+                runCatching { File(path).delete() }
             }
 
             editor.value = InventoryEditorState()
@@ -355,26 +353,12 @@ class InventoryViewModel(
             }
         }
     }
+
+    override fun onCleared() {
+        super.onCleared()
+        imageEmbedderManager.close()
+    }
 }
-
-    private fun generateUid(): String = java.util.UUID.randomUUID().toString().uppercase().replace("-", "").take(12)
-
-private fun String.toCentsOrNull(): Long? {
-    if (isBlank()) return null
-    return runCatching {
-        BigDecimal(trim()).movePointRight(2).longValueExact()
-    }.getOrNull()
-}
-
-private fun String.toEpochDayOrNull(): Long? {
-    if (isBlank()) return null
-    return runCatching {
-        val dateFormatter = DateTimeFormatter.ofPattern("dd-MM-yyyy")
-        LocalDate.parse(trim(), dateFormatter).toEpochDay()
-    }.getOrNull()
-}
-
-private fun Long.ifZero(fallback: Long): Long = if (this == 0L) fallback else this
 
 data class InventoryUiState(
     val query: String = "",

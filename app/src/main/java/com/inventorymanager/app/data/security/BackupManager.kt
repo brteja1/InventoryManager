@@ -68,7 +68,7 @@ class BackupManager(
     suspend fun importEncryptedBackup(
         uri: android.net.Uri,
         password: String,
-        onPreImport: () -> Unit
+        onPreImport: () -> Unit,
     ) = withContext(Dispatchers.IO) {
         context.contentResolver.openInputStream(uri)?.use { input ->
             BufferedInputStream(input, STREAM_BUFFER_SIZE).use { bis ->
@@ -182,8 +182,8 @@ class BackupManager(
         val header = ByteArray(MAGIC.size)
         val read = input.read(header)
         
-        if (read < 4 || header[0] != 'I'.code.toByte() || header[1] != 'M'.code.toByte() || 
-            header[2] != 'B'.code.toByte() || header[3] != 'K'.code.toByte()) {
+        if ((read < 4) || (header[0] != 'I'.code.toByte()) || (header[1] != 'M'.code.toByte()) || 
+            (header[2] != 'B'.code.toByte()) || (header[3] != 'K'.code.toByte())) {
             error("Invalid backup file format")
         }
         

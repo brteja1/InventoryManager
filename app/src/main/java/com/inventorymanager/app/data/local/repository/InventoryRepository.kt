@@ -10,6 +10,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.flatMapLatest
 
+@OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
 class InventoryRepository(
     private val container: InventoryAppContainer,
 ) {
@@ -25,7 +26,6 @@ class InventoryRepository(
         container.closeDatabase()
     }
 
-    @OptIn(kotlinx.coroutines.ExperimentalCoroutinesApi::class)
     fun observeItems(query: String): Flow<List<InventoryItemWithPhotos>> {
         return refreshTrigger.flatMapLatest {
             if (query.isBlank()) {
@@ -60,8 +60,19 @@ class InventoryRepository(
         database.inventoryDao().deleteItemById(itemId)
     }
 
-    fun observeUniqueLocations() = database.inventoryDao().observeUniqueLocations()
-    fun observeUniqueContainers() = database.inventoryDao().observeUniqueContainers()
-    fun observeUniqueCurrencies() = database.inventoryDao().observeUniqueCurrencies()
-    fun observeAllTags() = database.inventoryDao().observeAllTags()
+    fun observeUniqueLocations(): Flow<List<String>> = refreshTrigger.flatMapLatest {
+        database.inventoryDao().observeUniqueLocations()
+    }
+
+    fun observeUniqueContainers() = refreshTrigger.flatMapLatest {
+        database.inventoryDao().observeUniqueContainers()
+    }
+
+    fun observeUniqueCurrencies() = refreshTrigger.flatMapLatest {
+        database.inventoryDao().observeUniqueCurrencies()
+    }
+
+    fun observeAllTags() = refreshTrigger.flatMapLatest {
+        database.inventoryDao().observeAllTags()
+    }
 }

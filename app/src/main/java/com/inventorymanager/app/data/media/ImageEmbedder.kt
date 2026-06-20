@@ -76,6 +76,11 @@ class ImageEmbedderManager(private val context: Context) {
         return result?.embeddingResult()?.embeddings()?.firstOrNull()?.floatEmbedding()
     }
 
+    fun close() {
+        imageEmbedder?.close()
+        imageEmbedder = null
+    }
+
     companion object {
         fun cosineSimilarity(vectorA: FloatArray, vectorB: FloatArray): Float {
             if (vectorA.size != vectorB.size || vectorA.isEmpty()) return 0.0f

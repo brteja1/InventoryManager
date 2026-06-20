@@ -5,17 +5,22 @@ import android.content.Context
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
+import java.io.BufferedInputStream
+import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.InputStream
 import java.io.OutputStream
 import java.security.SecureRandom
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.zip.ZipEntry
+import java.util.zip.ZipInputStream
 import java.util.zip.ZipOutputStream
 import javax.crypto.Cipher
+import javax.crypto.CipherInputStream
 import javax.crypto.CipherOutputStream
 import javax.crypto.SecretKey
 import javax.crypto.SecretKeyFactory
@@ -34,6 +39,9 @@ class BackupManager(
     private val context: Context,
     private val databaseName: String,
 ) {
+    // Shared buffer to avoid constant large object allocations
+    private val ioBuffer = ByteArray(STREAM_BUFFER_SIZE)
+
     suspend fun exportEncryptedBackup(password: String): BackupExportResult = withContext(Dispatchers.IO) {
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         val zipFile = File.createTempFile("inventory_backup_", ".zip", context.cacheDir)
@@ -43,7 +51,9 @@ class BackupManager(
             createBackupZip(zipFile)
             val targetUri = createDownloadDestination(encryptedName)
             context.contentResolver.openOutputStream(targetUri)?.use { output ->
-                encryptFile(zipFile, output, password)
+                BufferedOutputStream(output, STREAM_BUFFER_SIZE).use { bos ->
+                    encryptFile(zipFile, bos, password)
+                }
             } ?: error("Unable to open export destination")
             finalizeDownload(targetUri)
 
@@ -61,33 +71,20 @@ class BackupManager(
         password: String,
         onPreImport: () -> Unit
     ) = withContext(Dispatchers.IO) {
-        val tempEncrypted = File.createTempFile("import_", ".enc", context.cacheDir)
-        val tempZip = File.createTempFile("import_", ".zip", context.cacheDir)
-        val buffer = ByteArray(8192)
-        try {
-            context.contentResolver.openInputStream(uri)?.use { input ->
-                FileOutputStream(tempEncrypted).use { output ->
-                    var bytesRead: Int
-                    while (input.read(buffer).also { bytesRead = it } != -1) {
-                        output.write(buffer, 0, bytesRead)
-                    }
-                }
-            } ?: error("Unable to open backup file")
-
-            decryptFile(tempEncrypted, tempZip, password)
-            
-            // Perform preparation (like closing the DB) before extraction
-            onPreImport()
-
-            extractBackupZip(tempZip)
-        } finally {
-            tempEncrypted.delete()
-            tempZip.delete()
-        }
+        context.contentResolver.openInputStream(uri)?.use { input ->
+            BufferedInputStream(input, STREAM_BUFFER_SIZE).use { bis ->
+                val decryptedStream = decryptStream(bis, password)
+                
+                // Close DB before we start writing files
+                onPreImport()
+                
+                extractZipFromStream(decryptedStream)
+            }
+        } ?: error("Unable to open backup file")
     }
 
     private fun createBackupZip(zipFile: File) {
-        ZipOutputStream(FileOutputStream(zipFile)).use { zip ->
+        ZipOutputStream(BufferedOutputStream(FileOutputStream(zipFile), STREAM_BUFFER_SIZE)).use { zip ->
             addFileIfExists(zip, context.getDatabasePath(databaseName), "database/$databaseName")
             addFileIfExists(zip, context.getDatabasePath("$databaseName-wal"), "database/$databaseName-wal")
             addFileIfExists(zip, context.getDatabasePath("$databaseName-shm"), "database/$databaseName-shm")
@@ -112,11 +109,10 @@ class BackupManager(
 
     private fun addFile(zip: ZipOutputStream, file: File, entryName: String) {
         zip.putNextEntry(ZipEntry(entryName))
-        val buffer = ByteArray(8192)
-        FileInputStream(file).use { input ->
+        BufferedInputStream(FileInputStream(file), STREAM_BUFFER_SIZE).use { input ->
             var bytesRead: Int
-            while (input.read(buffer).also { bytesRead = it } != -1) {
-                zip.write(buffer, 0, bytesRead)
+            while (input.read(ioBuffer).also { bytesRead = it } != -1) {
+                zip.write(ioBuffer, 0, bytesRead)
             }
         }
         zip.closeEntry()
@@ -171,77 +167,55 @@ class BackupManager(
         output.write(salt.size)
         output.write(salt)
 
-        val buffer = ByteArray(8192)
         CipherOutputStream(output, cipher).use { cipherOut ->
-            FileInputStream(input).use { fileIn ->
+            BufferedInputStream(FileInputStream(input), STREAM_BUFFER_SIZE).use { fileIn ->
                 var bytesRead: Int
-                while (fileIn.read(buffer).also { bytesRead = it } != -1) {
-                    cipherOut.write(buffer, 0, bytesRead)
+                while (fileIn.read(ioBuffer).also { bytesRead = it } != -1) {
+                    cipherOut.write(ioBuffer, 0, bytesRead)
                 }
             }
         }
     }
 
-    private fun decryptFile(input: File, output: File, password: String) {
-        val buffer = ByteArray(8192)
-        FileInputStream(input).use { fileIn ->
-            val header = ByteArray(MAGIC.size)
-            fileIn.read(header)
+    private fun decryptStream(input: InputStream, password: String): InputStream {
+        val header = ByteArray(MAGIC.size)
+        input.read(header)
+        
+        if (header.size < 4 || header[0] != 'I'.code.toByte() || header[1] != 'M'.code.toByte() || 
+            header[2] != 'B'.code.toByte() || header[3] != 'K'.code.toByte()) {
+            error("Invalid backup file format")
+        }
+        
+        val version = header.lastOrNull()?.toInt() ?: 0
+        
+        return if (version == 1) {
+            val ivSize = input.read()
+            val iv = ByteArray(ivSize)
+            input.read(iv)
             
-            // Check magic prefix (IMBK)
-            if (header.size < 4 || header[0] != 'I'.code.toByte() || header[1] != 'M'.code.toByte() || 
-                header[2] != 'B'.code.toByte() || header[3] != 'K'.code.toByte()) {
-                error("Invalid backup file format")
-            }
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            val keyStore = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+            val key = keyStore.getKey("inventory_backup_key", null) as? SecretKey 
+                ?: error("This backup was encrypted using a device-specific key. It can only be restored on the original device.")
             
-            val version = header.lastOrNull()?.toInt() ?: 0
-            
-            if (version == 1) {
-                // Legacy device-bound Keystore encryption
-                val ivSize = fileIn.read()
-                val iv = ByteArray(ivSize)
-                fileIn.read(iv)
-                
-                val cipher = Cipher.getInstance(TRANSFORMATION)
-                val keyStore = java.security.KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
-                val key = keyStore.getKey("inventory_backup_key", null) as? SecretKey 
-                    ?: error("This backup was encrypted using a device-specific key. It can only be restored on the original device.")
-                
-                cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
-                
-                javax.crypto.CipherInputStream(fileIn, cipher).use { cipherIn ->
-                    FileOutputStream(output).use { fileOut ->
-                        var bytesRead: Int
-                        while (cipherIn.read(buffer).also { bytesRead = it } != -1) {
-                            fileOut.write(buffer, 0, bytesRead)
-                        }
-                    }
-                }
-            } else if (version == 2) {
-                // New password-based encryption
-                val ivSize = fileIn.read()
-                val iv = ByteArray(ivSize)
-                fileIn.read(iv)
+            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
+            CipherInputStream(input, cipher)
+        } else if (version == 2) {
+            val ivSize = input.read()
+            val iv = ByteArray(ivSize)
+            input.read(iv)
 
-                val saltSize = fileIn.read()
-                val salt = ByteArray(saltSize)
-                fileIn.read(salt)
+            val saltSize = input.read()
+            val salt = ByteArray(saltSize)
+            input.read(salt)
 
-                val key = deriveKey(password, salt)
-                val cipher = Cipher.getInstance(TRANSFORMATION)
-                cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
+            val key = deriveKey(password, salt)
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
 
-                javax.crypto.CipherInputStream(fileIn, cipher).use { cipherIn ->
-                    FileOutputStream(output).use { fileOut ->
-                        var bytesRead: Int
-                        while (cipherIn.read(buffer).also { bytesRead = it } != -1) {
-                            fileOut.write(buffer, 0, bytesRead)
-                        }
-                    }
-                }
-            } else {
-                error("Unsupported backup version: $version")
-            }
+            CipherInputStream(input, cipher)
+        } else {
+            error("Unsupported backup version: $version")
         }
     }
 
@@ -252,40 +226,37 @@ class BackupManager(
         return SecretKeySpec(tmp.encoded, "AES")
     }
 
-    private fun extractBackupZip(zipFile: File) {
-        // Clear existing images before extraction to avoid orphaned files
+    private fun extractZipFromStream(input: InputStream) {
         val imagesDir = File(context.filesDir, "inventory_images")
         if (imagesDir.exists()) {
             imagesDir.deleteRecursively()
         }
         imagesDir.mkdirs()
 
-        val buffer = ByteArray(8192)
-        java.util.zip.ZipFile(zipFile).use { zip ->
-            zip.entries().asSequence().forEach { entry ->
+        ZipInputStream(input).use { zis ->
+            var entry: ZipEntry? = zis.nextEntry
+            while (entry != null) {
                 if (entry.name.startsWith("database/")) {
                     val target = context.getDatabasePath(entry.name.substringAfter("database/"))
                     target.parentFile?.mkdirs()
-                    zip.getInputStream(entry).use { input ->
-                        FileOutputStream(target).use { output ->
-                            var bytesRead: Int
-                            while (input.read(buffer).also { bytesRead = it } != -1) {
-                                output.write(buffer, 0, bytesRead)
-                            }
+                    BufferedOutputStream(FileOutputStream(target), STREAM_BUFFER_SIZE).use { fos ->
+                        var bytesRead: Int
+                        while (zis.read(ioBuffer).also { bytesRead = it } != -1) {
+                            fos.write(ioBuffer, 0, bytesRead)
                         }
                     }
                 } else if (entry.name.startsWith("images/")) {
                     val target = File(context.filesDir, "inventory_images/${entry.name.substringAfter("images/")}")
                     target.parentFile?.mkdirs()
-                    zip.getInputStream(entry).use { input ->
-                        FileOutputStream(target).use { output ->
-                            var bytesRead: Int
-                            while (input.read(buffer).also { bytesRead = it } != -1) {
-                                output.write(buffer, 0, bytesRead)
-                            }
+                    BufferedOutputStream(FileOutputStream(target), STREAM_BUFFER_SIZE).use { fos ->
+                        var bytesRead: Int
+                        while (zis.read(ioBuffer).also { bytesRead = it } != -1) {
+                            fos.write(ioBuffer, 0, bytesRead)
                         }
                     }
                 }
+                zis.closeEntry()
+                entry = zis.nextEntry
             }
         }
     }
@@ -296,5 +267,6 @@ class BackupManager(
         private const val ITERATIONS = 10000
         private const val KEY_SIZE_BITS = 256
         private const val SALT_SIZE_BYTES = 16
+        private const val STREAM_BUFFER_SIZE = 128 * 1024 // 128KB buffer
     }
 }

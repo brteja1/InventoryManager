@@ -33,9 +33,18 @@ class ImageEmbedderManager(private val context: Context) {
     suspend fun generateEmbedding(uri: Uri): FloatArray? = withContext(Dispatchers.IO) {
         try {
             setupEmbedder()
-            val inputStream = context.contentResolver.openInputStream(uri)
-            val bitmap = BitmapFactory.decodeStream(inputStream)
-            generateEmbeddingFromBitmap(bitmap)
+            context.contentResolver.openInputStream(uri)?.use { inputStream ->
+                val options = BitmapFactory.Options().apply {
+                    inJustDecodeBounds = false
+                    inSampleSize = 2 // Downsample to reduce memory pressure
+                }
+                val bitmap = BitmapFactory.decodeStream(inputStream, null, options)
+                if (bitmap != null) {
+                    val result = generateEmbeddingFromBitmap(bitmap)
+                    bitmap.recycle()
+                    result
+                } else null
+            }
         } catch (e: Exception) {
             e.printStackTrace()
             null
@@ -45,8 +54,16 @@ class ImageEmbedderManager(private val context: Context) {
     suspend fun generateEmbedding(file: File): FloatArray? = withContext(Dispatchers.IO) {
         try {
             setupEmbedder()
-            val bitmap = BitmapFactory.decodeFile(file.absolutePath)
-            generateEmbeddingFromBitmap(bitmap)
+            val options = BitmapFactory.Options().apply {
+                inJustDecodeBounds = false
+                inSampleSize = 2 // Downsample
+            }
+            val bitmap = BitmapFactory.decodeFile(file.absolutePath, options)
+            if (bitmap != null) {
+                val result = generateEmbeddingFromBitmap(bitmap)
+                bitmap.recycle()
+                result
+            } else null
         } catch (e: Exception) {
             e.printStackTrace()
             null

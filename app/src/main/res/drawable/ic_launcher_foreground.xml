@@ -1,0 +1,75 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <group
+        android:scaleX="0.6"
+        android:scaleY="0.6"
+        android:translateX="21.6"
+        android:translateY="21.6">
+
+        <!-- Gear moved to x=80 so exactly half is under the clipboard -->
+        <path
+            android:fillColor="#C65A7B"
+            android:pathData="M80,54m-18,0a18,18 0,1 1,36 0a18,18 0,1 1,-36 0" />
+        <path
+            android:fillColor="#C65A7B"
+            android:pathData="M80,32 L80,76 M62,54 L98,54 M67,41 L93,67 M67,67 L93,41"
+            android:strokeWidth="8"
+            android:strokeColor="#C65A7B"
+            android:strokeLineCap="round" />
+        <path
+            android:fillColor="#F8F4EC"
+            android:pathData="M80,54m-6,0a6,6 0,1 1,12 0a6,6 0,1 1,-12 0" />
+
+        <!-- Clipboard Frame (Gold) -->
+        <path
+            android:fillColor="#B88A2B"
+            android:pathData="M20,25 L20,88 Q20,92 24,92 L76,92 Q80,92 80,88 L80,25 Q80,21 76,21 L24,21 Q20,21 20,25 Z" />
+
+        <!-- Clipboard Paper (Cream) -->
+        <path
+            android:fillColor="#F8F4EC"
+            android:pathData="M26,27 L74,27 L74,86 L26,86 Z" />
+
+        <!-- Checklist Items -->
+        <path
+            android:fillColor="#2C7A7B"
+            android:pathData="M32,38 L42,38 L42,48 L32,48 Z" />
+        <path
+            android:fillColor="#101828"
+            android:pathData="M48,41 L68,41 M48,45 L62,45"
+            android:strokeWidth="2"
+            android:strokeColor="#101828"
+            android:strokeLineCap="round" />
+
+        <path
+            android:fillColor="#2C7A7B"
+            android:pathData="M32,54 L42,54 L42,64 L32,64 Z" />
+        <path
+            android:fillColor="#101828"
+            android:pathData="M48,57 L68,57 M48,61 L62,61"
+            android:strokeWidth="2"
+            android:strokeColor="#101828"
+            android:strokeLineCap="round" />
+
+        <path
+            android:fillColor="#2C7A7B"
+            android:pathData="M32,70 L42,70 L42,80 L32,80 Z" />
+        <path
+            android:fillColor="#101828"
+            android:pathData="M48,73 L68,73 M48,77 L62,77"
+            android:strokeWidth="2"
+            android:strokeColor="#101828"
+            android:strokeLineCap="round" />
+
+        <!-- Clip at top (Ink) -->
+        <path
+            android:fillColor="#101828"
+            android:pathData="M40,16 L60,16 Q64,16 64,20 L64,26 L36,26 L36,20 Q36,16 40,16 Z" />
+    </group>
+
+</vector>

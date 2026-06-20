@@ -1,6 +1,8 @@
 package com.inventorymanager.app.ui
 
+import android.Manifest
 import android.content.Context
+import android.content.pm.PackageManager
 import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
@@ -27,15 +29,14 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.itemsIndexed
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Add
-import androidx.compose.material.icons.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.DateRange
 import androidx.compose.material.icons.outlined.Delete
+import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material.icons.outlined.FavoriteBorder
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Menu
@@ -43,19 +44,18 @@ import androidx.compose.material.icons.outlined.PhotoCamera
 import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material.icons.outlined.Search
-import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Upload
-import androidx.compose.material.icons.outlined.Download
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.DatePicker
 import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ExposedDropdownMenuBox
 import androidx.compose.material3.ExposedDropdownMenuDefaults
-import androidx.compose.material3.FilterChip
 import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -75,7 +75,6 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.material3.rememberDrawerState
-import androidx.compose.material3.DrawerValue
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -93,17 +92,19 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.core.net.toUri
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import coil.compose.AsyncImage
 import coil.request.ImageRequest
+import kotlinx.coroutines.launch
 import java.io.File
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import kotlin.math.absoluteValue
-import kotlinx.coroutines.launch
 
 @Composable
 fun InventoryManagerApp(
@@ -142,6 +143,8 @@ fun InventoryManagerApp(
         InventoryListScreen(
             uiState = uiState,
             onQueryChanged = viewModel::onQueryChanged,
+            onImageSearch = viewModel::onImageSearch,
+            onClearImageSearch = viewModel::clearImageSearch,
             onCreateItem = viewModel::startCreating,
             onEditItem = viewModel::startEditing,
             onLockApp = onLockApp,
@@ -157,6 +160,8 @@ fun InventoryManagerApp(
 private fun InventoryListScreen(
     uiState: InventoryUiState,
     onQueryChanged: (String) -> Unit,
+    onImageSearch: (Uri) -> Unit,
+    onClearImageSearch: () -> Unit,
     onCreateItem: () -> Unit,
     onEditItem: (com.inventorymanager.app.data.local.entity.InventoryItemWithPhotos) -> Unit,
     onLockApp: () -> Unit,
@@ -166,6 +171,9 @@ private fun InventoryListScreen(
 ) {
     val drawerState = rememberDrawerState(initialValue = DrawerValue.Closed)
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    var pendingSearchImageUri by remember { mutableStateOf<Uri?>(null) }
+    var searchMenuExpanded by remember { mutableStateOf(false) }
 
     val importLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.OpenDocument(),
@@ -173,10 +181,38 @@ private fun InventoryListScreen(
         uri?.let(onImportBackup)
     }
 
+    val imageSearchLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia(),
+    ) { uri ->
+        uri?.let(onImageSearch)
+    }
+
+    val cameraSearchLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.TakePicture(),
+    ) { success ->
+        if (success) {
+            pendingSearchImageUri?.let(onImageSearch)
+        }
+        pendingSearchImageUri = null
+    }
+
+    val cameraSearchPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (isGranted) {
+            pendingSearchImageUri = createCaptureUri(context)
+            pendingSearchImageUri?.let(cameraSearchLauncher::launch)
+        } else {
+            scope.launch {
+                snackbarHostState.showSnackbar("Camera permission is required to search by photo")
+            }
+        }
+    }
+
     ModalNavigationDrawer(
         drawerState = drawerState,
         drawerContent = {
-            ModalDrawerSheet {
+            ModalDrawerSheet(modifier = Modifier.width(300.dp)) {
                 Spacer(Modifier.height(12.dp))
                 Text(
                     "Inventory Manager",
@@ -244,9 +280,54 @@ private fun InventoryListScreen(
                     value = uiState.query,
                     onValueChange = onQueryChanged,
                     singleLine = true,
-                    enabled = uiState.items.isNotEmpty() || uiState.query.isNotEmpty(),
+                    enabled = uiState.items.isNotEmpty() || uiState.query.isNotEmpty() || uiState.isImageSearchActive,
                     leadingIcon = { Icon(Icons.Outlined.Search, contentDescription = null) },
-                    placeholder = { Text("Search by name, location, container, or tag") },
+                    trailingIcon = {
+                        if (uiState.isImageSearchActive) {
+                            IconButton(onClick = onClearImageSearch) {
+                                Icon(Icons.Outlined.Close, contentDescription = "Clear image search")
+                            }
+                        } else {
+                            Box {
+                                IconButton(onClick = { searchMenuExpanded = true }) {
+                                    Icon(Icons.Outlined.PhotoCamera, contentDescription = "Search by image")
+                                }
+                                DropdownMenu(
+                                    expanded = searchMenuExpanded,
+                                    onDismissRequest = { searchMenuExpanded = false }
+                                ) {
+                                    DropdownMenuItem(
+                                        text = { Text("Gallery") },
+                                        onClick = {
+                                            searchMenuExpanded = false
+                                            imageSearchLauncher.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                                        },
+                                        leadingIcon = { Icon(Icons.Outlined.PhotoLibrary, contentDescription = null) }
+                                    )
+                                    DropdownMenuItem(
+                                        text = { Text("Camera") },
+                                        onClick = {
+                                            searchMenuExpanded = false
+                                            val permissionCheckResult = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
+                                            if (permissionCheckResult == PackageManager.PERMISSION_GRANTED) {
+                                                pendingSearchImageUri = createCaptureUri(context)
+                                                pendingSearchImageUri?.let(cameraSearchLauncher::launch)
+                                            } else {
+                                                cameraSearchPermissionLauncher.launch(Manifest.permission.CAMERA)
+                                            }
+                                        },
+                                        leadingIcon = { Icon(Icons.Outlined.PhotoCamera, contentDescription = null) }
+                                    )
+                                }
+                            }
+                        }
+                    },
+                    placeholder = { 
+                        Text(
+                            text = if (uiState.isImageSearchActive) "Image search active" else "Search by name, location, tag, or image",
+                            style = MaterialTheme.typography.bodyMedium
+                        )
+                    },
                     modifier = Modifier.fillMaxWidth(),
                 )
 
@@ -266,8 +347,8 @@ private fun InventoryListScreen(
                             }
                         }
                     } else {
-                        itemsIndexed(uiState.items) { index, item ->
-                            InventoryCard(item = item, onClick = { onEditItem(item) })
+                        itemsIndexed(uiState.items) { index, (item, score) ->
+                            InventoryCard(item = item, score = score, onClick = { onEditItem(item) })
                             if (index < uiState.items.lastIndex) {
                                 HorizontalDivider(
                                     modifier = Modifier.padding(vertical = 4.dp),
@@ -308,6 +389,7 @@ private fun NoResultsState(query: String) {
 @Composable
 private fun InventoryCard(
     item: com.inventorymanager.app.data.local.entity.InventoryItemWithPhotos,
+    score: Float? = null,
     onClick: () -> Unit,
 ) {
     val imagePath = item.item.primaryImagePath.ifBlank {
@@ -362,12 +444,29 @@ private fun InventoryCard(
             Spacer(modifier = Modifier.width(16.dp))
 
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    item.item.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 1,
-                )
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(
+                        item.item.name,
+                        style = MaterialTheme.typography.titleMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        maxLines = 1,
+                        modifier = Modifier.weight(1f)
+                    )
+                    if (score != null) {
+                        val percentage = (score * 100).coerceIn(0f, 100f).toInt()
+                        Text(
+                            text = "$percentage%",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(start = 8.dp)
+                        )
+                    }
+                }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Icon(
                         imageVector = Icons.Outlined.Place,
@@ -439,6 +538,8 @@ private fun InventoryEditorScreen(
     onSave: () -> Unit,
 ) {
     val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    val snackbarHostState = remember { SnackbarHostState() }
     var pendingCameraUri by remember { mutableStateOf<Uri?>(null) }
     var showDatePicker by remember { mutableStateOf(false) }
     var showDeleteConfirmation by remember { mutableStateOf(false) }
@@ -536,13 +637,27 @@ private fun InventoryEditorScreen(
         pendingCameraUri = null
     }
 
+    val cameraPermissionLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { isGranted: Boolean ->
+        if (isGranted) {
+            pendingCameraUri = createCaptureUri(context)
+            pendingCameraUri?.let(cameraLauncher::launch)
+        } else {
+            scope.launch {
+                snackbarHostState.showSnackbar("Camera permission is required to take photos")
+            }
+        }
+    }
+
     Scaffold(
+        snackbarHost = { SnackbarHost(snackbarHostState) },
         topBar = {
             TopAppBar(
                 title = { Text(if (state.itemId == 0L) "Add Item" else "Edit Item") },
                 navigationIcon = {
                     IconButton(onClick = onClose) {
-                        Icon(Icons.Outlined.ArrowBack, contentDescription = "Back")
+                        Icon(Icons.AutoMirrored.Outlined.ArrowBack, contentDescription = "Back")
                     }
                 },
                 actions = {
@@ -689,8 +804,13 @@ private fun InventoryEditorScreen(
                         label = "Camera",
                         icon = Icons.Outlined.PhotoCamera,
                         onClick = {
-                            pendingCameraUri = createCaptureUri(context)
-                            pendingCameraUri?.let(cameraLauncher::launch)
+                            val permissionCheckResult = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA)
+                            if (permissionCheckResult == PackageManager.PERMISSION_GRANTED) {
+                                pendingCameraUri = createCaptureUri(context)
+                                pendingCameraUri?.let(cameraLauncher::launch)
+                            } else {
+                                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                            }
                         },
                     )
                 }
@@ -1004,7 +1124,7 @@ private fun EditorPhotoPreview(
 ) {
     val requestData = when (photo) {
         is InventoryEditorPhoto.Existing -> File(photo.path)
-        is InventoryEditorPhoto.Pending -> Uri.parse(photo.uri)
+        is InventoryEditorPhoto.Pending -> photo.uri.toUri()
     }
 
     Box {

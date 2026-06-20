@@ -22,6 +22,7 @@ class MainActivity : FragmentActivity() {
             InventoryViewModelFactory(
                 app.container.inventoryRepository,
                 app.container.imageStorageManager,
+                app.container.imageEmbedderManager,
                 app.container.backupManager,
             ),
         )[InventoryViewModel::class.java]

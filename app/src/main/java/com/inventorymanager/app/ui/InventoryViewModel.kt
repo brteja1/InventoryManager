@@ -7,8 +7,11 @@ import com.inventorymanager.app.data.local.entity.InventoryItemEntity
 import com.inventorymanager.app.data.local.entity.InventoryItemWithPhotos
 import com.inventorymanager.app.data.local.entity.InventoryPhotoEntity
 import com.inventorymanager.app.data.local.repository.InventoryRepository
+import com.inventorymanager.app.data.media.ImageEmbedderManager
 import com.inventorymanager.app.data.media.ImageStorageManager
 import com.inventorymanager.app.data.security.BackupManager
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import java.io.File
 import java.math.BigDecimal
 import java.time.LocalDate
 import java.time.format.DateTimeFormatter
@@ -23,28 +26,44 @@ import kotlinx.coroutines.launch
 class InventoryViewModel(
     private val repository: InventoryRepository,
     private val imageStorageManager: ImageStorageManager,
+    private val imageEmbedderManager: ImageEmbedderManager,
     private val backupManager: BackupManager,
 ) : ViewModel() {
     private val query = MutableStateFlow("")
+    private val searchEmbedding = MutableStateFlow<FloatArray?>(null)
     private val selectedLocation = MutableStateFlow<String?>(null)
+    @OptIn(ExperimentalCoroutinesApi::class)
     private val items = query.flatMapLatest { repository.observeItems(it) }
     private val editor = MutableStateFlow(InventoryEditorState())
     private val backup = MutableStateFlow(BackupState())
 
     val uiState: StateFlow<InventoryUiState> =
         combine(
-            query,
-            selectedLocation,
+            combine(query, searchEmbedding, selectedLocation) { q, e, l -> Triple(q, e, l) },
             items,
             editor,
             backup,
-        ) { queryText, location, items, editorState, backupState ->
+        ) { (queryText, embedding, location), items, editorState, backupState ->
             val filtered = items.filter { item ->
                 location == null || item.item.locationName == location
             }
 
+            val finalItems: List<Pair<InventoryItemWithPhotos, Float?>> = if (embedding != null) {
+                filtered.map { item ->
+                    val similarity = item.item.imageEmbedding?.let { 
+                        ImageEmbedderManager.cosineSimilarity(embedding, it)
+                    } ?: 0.0f
+                    item to similarity
+                }
+                .filter { it.second >= 0.2f }
+                .sortedByDescending { it.second }
+            } else {
+                filtered.map { it to null }
+            }
+
             InventoryUiState(
                 query = queryText,
+                isImageSearchActive = embedding != null,
                 selectedLocation = location,
                 locations = items.map { it.item.locationName }.filter { it.isNotBlank() }.distinct().sorted(),
                 allContainers = items.map { it.item.locationName to it.item.containerName }
@@ -52,12 +71,12 @@ class InventoryViewModel(
                     .distinct()
                     .sortedBy { it.second },
                 currencies = items.map { it.item.currencyCode }.filter { it.isNotBlank() }.distinct().sorted(),
-                tags = items.flatMap { it.item.categoryTagsCsv.split(",") }
+                tags = items.asSequence().flatMap { it.item.categoryTagsCsv.split(",") }
                     .map { it.trim() }
                     .filter { it.isNotBlank() }
                     .distinct()
-                    .sorted(),
-                items = filtered,
+                    .sorted().toList(),
+                items = finalItems,
                 editor = editorState,
                 isExportingBackup = backupState.isExporting,
                 isImportingBackup = backupState.isImporting,
@@ -71,6 +90,23 @@ class InventoryViewModel(
 
     fun onQueryChanged(value: String) {
         query.value = value
+        if (value.isNotEmpty()) {
+            searchEmbedding.value = null
+        }
+    }
+
+    fun onImageSearch(uri: Uri) {
+        viewModelScope.launch {
+            val embedding = imageEmbedderManager.generateEmbedding(uri)
+            searchEmbedding.value = embedding
+            if (embedding != null) {
+                query.value = ""
+            }
+        }
+    }
+
+    fun clearImageSearch() {
+        searchEmbedding.value = null
     }
 
     fun onLocationSelected(value: String?) {
@@ -181,6 +217,9 @@ class InventoryViewModel(
                     containerName = snapshot.containerName.trim(),
                     categoryTagsCsv = snapshot.tagsText.trim(),
                     primaryImagePath = savedPhotoPaths.firstOrNull().orEmpty(),
+                    imageEmbedding = savedPhotoPaths.firstOrNull()?.let { path ->
+                        imageEmbedderManager.generateEmbedding(File(path))
+                    },
                 )
 
                 repository.saveItem(
@@ -288,12 +327,13 @@ private fun Long.ifZero(fallback: Long): Long = if (this == 0L) fallback else th
 
 data class InventoryUiState(
     val query: String = "",
+    val isImageSearchActive: Boolean = false,
     val selectedLocation: String? = null,
     val locations: List<String> = emptyList(),
     val allContainers: List<Pair<String, String>> = emptyList(),
     val currencies: List<String> = emptyList(),
     val tags: List<String> = emptyList(),
-    val items: List<InventoryItemWithPhotos> = emptyList(),
+    val items: List<Pair<InventoryItemWithPhotos, Float?>> = emptyList(),
     val editor: InventoryEditorState = InventoryEditorState(),
     val isExportingBackup: Boolean = false,
     val isImportingBackup: Boolean = false,

@@ -15,6 +15,7 @@ data class InventoryItemEntity(
     val containerName: String,
     val categoryTagsCsv: String,
     val primaryImagePath: String,
+    val imageEmbedding: FloatArray? = null,
     val createdAtEpochMillis: Long = System.currentTimeMillis(),
 )
 

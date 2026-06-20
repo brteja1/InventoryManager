@@ -12,6 +12,7 @@ The current scaffold is Kotlin + Jetpack Compose + Room, with placeholders and w
 - Room-backed inventory metadata
 - Optional biometric app lock
 - Encrypted export/import backup
+- On-device semantic image search (MediaPipe)
 
 ## Product Requirements
 

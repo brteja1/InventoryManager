@@ -6,9 +6,10 @@
 
 ### Feature 1: The Visual Catalog (Core Asset Management)
 - **Photo-First Capture**: Launch camera directly or select from gallery. Primary photo serves as the visual identifier. Includes runtime permission handling for camera access.
-- **Multi-Image Support**: Support a primary display image plus multiple supplementary photos per asset.
+- **Multi-Image Support**: Support a primary display image plus multiple supplementary photos per asset. High-resolution photos can be viewed in a full-screen **Lightbox Zoom** overlay.
 - **Item Deletion**: Ability to permanently delete an item and its associated photos from the database and storage.
 - **Metadata Fields**:
+    - **Unique Identifier (UID)**: Each item is assigned a 12-character unique alphanumeric ID to ensure data integrity during imports.
     - **Item Name / Description**: Required visual identifier.
     - **Estimated Value**: Currency-aware value (Default: **INR**).
     - **Purchase / Acquisition Date**: Entry via an integrated **Calendar/Date Picker** (Format: **DD-MM-YYYY**).
@@ -30,9 +31,9 @@
 
 ### Feature 4: Data Security & Backup
 - **Biometric Authentication**: Integration with Android BiometricPrompt for app launch protection. Quick-lock action available in the top app bar.
-- **Encrypted Backup & Restore**:
-    - **Export**: Package database and images into an encrypted `.zip.enc` file in the Downloads folder.
-    - **Import**: Restore the full database and image library from an encrypted backup file.
+- **Portable Password-Protected Backup**:
+    - **Export**: Package database and images into an encrypted `.zip.enc` file. Encryption is **password-based (PBKDF2 + AES-256)**, allowing backups to be restored on any device.
+    - **Import**: Restore the full database and image library. Supports both new password-protected backups and legacy device-bound backups for seamless transitions.
     - **Navigation Drawer**: Dedicated side menu for maintenance actions (Import/Export).
 
 ### Feature 5: Semantic Image Search
@@ -46,7 +47,7 @@
 - **Local-First Architecture**: 100% offline operation. No third-party servers.
 - **Privacy**: Photos stored in app-private internal storage, isolated from system gallery.
 - **Performance**: Automatic image compression to **WebP** to minimize storage footprint.
-- **Database Integrity**: Automatic schema migration support with destructive fallback for rapid development.
+- **Database Integrity**: Automatic schema migration support to ensure data persistence across app versions.
 
 ## 3. Tech Stack
 - **Language**: Kotlin

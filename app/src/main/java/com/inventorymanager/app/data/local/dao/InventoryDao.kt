@@ -52,4 +52,21 @@ interface InventoryDao {
 
     @Query("DELETE FROM inventory_items WHERE id = :itemId")
     suspend fun deleteItemById(itemId: Long)
+
+    @Query("SELECT DISTINCT locationName FROM inventory_items WHERE locationName != '' ORDER BY locationName ASC")
+    fun observeUniqueLocations(): Flow<List<String>>
+
+    @Query("SELECT DISTINCT locationName, containerName FROM inventory_items WHERE locationName != '' AND containerName != '' ORDER BY containerName ASC")
+    fun observeUniqueContainers(): Flow<List<LocationContainerPair>>
+
+    @Query("SELECT DISTINCT currencyCode FROM inventory_items WHERE currencyCode != '' ORDER BY currencyCode ASC")
+    fun observeUniqueCurrencies(): Flow<List<String>>
+
+    @Query("SELECT categoryTagsCsv FROM inventory_items WHERE categoryTagsCsv != ''")
+    fun observeAllTags(): Flow<List<String>>
 }
+
+data class LocationContainerPair(
+    val locationName: String,
+    val containerName: String,
+)

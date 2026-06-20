@@ -59,4 +59,9 @@ class InventoryRepository(
     suspend fun deleteItem(itemId: Long) {
         database.inventoryDao().deleteItemById(itemId)
     }
+
+    fun observeUniqueLocations() = database.inventoryDao().observeUniqueLocations()
+    fun observeUniqueContainers() = database.inventoryDao().observeUniqueContainers()
+    fun observeUniqueCurrencies() = database.inventoryDao().observeUniqueCurrencies()
+    fun observeAllTags() = database.inventoryDao().observeAllTags()
 }

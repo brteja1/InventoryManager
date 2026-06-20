@@ -26,6 +26,7 @@ import kotlinx.coroutines.flow.flatMapLatest
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalCoroutinesApi::class)
 class InventoryViewModel(
     private val repository: InventoryRepository,
     private val imageStorageManager: ImageStorageManager,
@@ -43,13 +44,43 @@ class InventoryViewModel(
         if (importing) flowOf(emptyList()) else repository.observeItems(q)
     }.flatMapLatest { it }
 
+    private val locations = backup.map { it.isImporting }.distinctUntilChanged().flatMapLatest { importing ->
+        if (importing) flowOf(emptyList()) else repository.observeUniqueLocations()
+    }
+
+    private val allContainers = backup.map { it.isImporting }.distinctUntilChanged().flatMapLatest { importing ->
+        if (importing) flowOf(emptyList()) else repository.observeUniqueContainers().map { list ->
+            list.map { it.locationName to it.containerName }
+        }
+    }
+
+    private val currencies = backup.map { it.isImporting }.distinctUntilChanged().flatMapLatest { importing ->
+        if (importing) flowOf(emptyList()) else repository.observeUniqueCurrencies()
+    }
+
+    private val tags = backup.map { it.isImporting }.distinctUntilChanged().flatMapLatest { importing ->
+        if (importing) flowOf(emptyList()) else repository.observeAllTags().map { list ->
+            list.asSequence()
+                .flatMap { it.split(",") }
+                .map { it.trim() }
+                .filter { it.isNotBlank() }
+                .distinct()
+                .sorted()
+                .toList()
+        }
+    }
+
     val uiState: StateFlow<InventoryUiState> =
         combine(
             combine(query, searchEmbedding, selectedLocation) { q, e, l -> Triple(q, e, l) },
             items,
+            combine(locations, allContainers, currencies, tags) { l, c, cu, t ->
+                FilterData(l, c, cu, t)
+            },
             editor,
-            backup,
-        ) { (queryText, embedding, location), items, editorState, backupState ->
+            backup
+        ) { search, items, filters, editorState, backupState ->
+            val (queryText, embedding, location) = search
             if (backupState.isImporting) {
                 return@combine InventoryUiState(
                     query = queryText,
@@ -84,18 +115,10 @@ class InventoryViewModel(
                 query = queryText,
                 isImageSearchActive = embedding != null,
                 selectedLocation = location,
-                locations = items.asSequence().map { it.item.locationName }.filter { it.isNotBlank() }.distinct().sorted().toList(),
-                allContainers = items.asSequence().map { it.item.locationName to it.item.containerName }
-                    .filter { it.first.isNotBlank() && it.second.isNotBlank() }
-                    .distinct()
-                    .sortedBy { it.second }
-                    .toList(),
-                currencies = items.asSequence().map { it.item.currencyCode }.filter { it.isNotBlank() }.distinct().sorted().toList(),
-                tags = items.asSequence().flatMap { it.item.categoryTagsCsv.split(",") }
-                    .map { it.trim() }
-                    .filter { it.isNotBlank() }
-                    .distinct()
-                    .sorted().toList(),
+                locations = filters.locations,
+                allContainers = filters.containers,
+                currencies = filters.currencies,
+                tags = filters.tags,
                 items = finalItems,
                 editor = editorState,
                 isExportingBackup = backupState.isExporting,
@@ -372,6 +395,13 @@ data class BackupState(
     val isExporting: Boolean = false,
     val isImporting: Boolean = false,
     val message: String? = null,
+)
+
+private data class FilterData(
+    val locations: List<String>,
+    val containers: List<Pair<String, String>>,
+    val currencies: List<String>,
+    val tags: List<String>,
 )
 
 data class InventoryEditorState(

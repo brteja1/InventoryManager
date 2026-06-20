@@ -96,6 +96,8 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import androidx.core.net.toUri
@@ -630,6 +632,7 @@ private fun InventoryEditorScreen(
     var containerExpanded by remember { mutableStateOf(false) }
     var currencyExpanded by remember { mutableStateOf(false) }
     var showAddTagDialog by remember { mutableStateOf(false) }
+    var zoomedPhoto by remember { mutableStateOf<InventoryEditorPhoto?>(null) }
     val dateFormatter = remember { DateTimeFormatter.ofPattern("dd-MM-yyyy") }
 
     var locationTextFieldValue by remember {
@@ -869,6 +872,7 @@ private fun InventoryEditorScreen(
                     EditorPhotoPreview(
                         photo = photo,
                         onRemove = { onRemovePhoto(index) },
+                        onClick = { zoomedPhoto = photo }
                     )
                 }
                 item {
@@ -1160,6 +1164,46 @@ private fun InventoryEditorScreen(
             }
         }
     }
+
+    if (zoomedPhoto != null) {
+        Dialog(
+            onDismissRequest = { zoomedPhoto = null },
+            properties = DialogProperties(usePlatformDefaultWidth = false)
+        ) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(androidx.compose.ui.graphics.Color.Black)
+                    .clickable { zoomedPhoto = null },
+                contentAlignment = Alignment.Center
+            ) {
+                val requestData = when (val photo = zoomedPhoto!!) {
+                    is InventoryEditorPhoto.Existing -> File(photo.path)
+                    is InventoryEditorPhoto.Pending -> photo.uri.toUri()
+                }
+                AsyncImage(
+                    model = ImageRequest.Builder(LocalContext.current)
+                        .data(requestData)
+                        .build(),
+                    contentDescription = null,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Fit
+                )
+                IconButton(
+                    onClick = { zoomedPhoto = null },
+                    modifier = Modifier
+                        .align(Alignment.TopEnd)
+                        .padding(16.dp)
+                ) {
+                    Icon(
+                        Icons.Outlined.Close,
+                        contentDescription = "Close",
+                        tint = androidx.compose.ui.graphics.Color.White
+                    )
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -1211,6 +1255,7 @@ private fun TagBadge(tag: String, onRemove: (() -> Unit)? = null) {
 private fun EditorPhotoPreview(
     photo: InventoryEditorPhoto,
     onRemove: () -> Unit,
+    onClick: () -> Unit,
 ) {
     val requestData = when (photo) {
         is InventoryEditorPhoto.Existing -> File(photo.path)
@@ -1222,7 +1267,8 @@ private fun EditorPhotoPreview(
             shape = RoundedCornerShape(20.dp),
             modifier = Modifier
                 .height(120.dp)
-                .aspectRatio(1f),
+                .aspectRatio(1f)
+                .clickable(onClick = onClick),
         ) {
             AsyncImage(
                 model = ImageRequest.Builder(LocalContext.current)

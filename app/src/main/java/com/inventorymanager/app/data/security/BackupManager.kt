@@ -2,8 +2,6 @@ package com.inventorymanager.app.data.security
 
 import android.content.ContentValues
 import android.content.Context
-import android.security.keystore.KeyGenParameterSpec
-import android.security.keystore.KeyProperties
 import android.os.Build
 import android.os.Environment
 import android.provider.MediaStore
@@ -11,7 +9,7 @@ import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.OutputStream
-import java.security.KeyStore
+import java.security.SecureRandom
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -19,8 +17,11 @@ import java.util.zip.ZipEntry
 import java.util.zip.ZipOutputStream
 import javax.crypto.Cipher
 import javax.crypto.CipherOutputStream
-import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
+import javax.crypto.SecretKeyFactory
+import javax.crypto.spec.GCMParameterSpec
+import javax.crypto.spec.PBEKeySpec
+import javax.crypto.spec.SecretKeySpec
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -33,7 +34,7 @@ class BackupManager(
     private val context: Context,
     private val databaseName: String,
 ) {
-    suspend fun exportEncryptedBackup(): BackupExportResult = withContext(Dispatchers.IO) {
+    suspend fun exportEncryptedBackup(password: String): BackupExportResult = withContext(Dispatchers.IO) {
         val stamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
         val zipFile = File.createTempFile("inventory_backup_", ".zip", context.cacheDir)
         val encryptedName = "inventory_backup_$stamp.zip.enc"
@@ -42,7 +43,7 @@ class BackupManager(
             createBackupZip(zipFile)
             val targetUri = createDownloadDestination(encryptedName)
             context.contentResolver.openOutputStream(targetUri)?.use { output ->
-                encryptFile(zipFile, output)
+                encryptFile(zipFile, output, password)
             } ?: error("Unable to open export destination")
             finalizeDownload(targetUri)
 
@@ -55,7 +56,7 @@ class BackupManager(
         }
     }
 
-    suspend fun importEncryptedBackup(uri: android.net.Uri) = withContext(Dispatchers.IO) {
+    suspend fun importEncryptedBackup(uri: android.net.Uri, password: String) = withContext(Dispatchers.IO) {
         val tempEncrypted = File.createTempFile("import_", ".enc", context.cacheDir)
         val tempZip = File.createTempFile("import_", ".zip", context.cacheDir)
         try {
@@ -65,7 +66,7 @@ class BackupManager(
                 }
             } ?: error("Unable to open backup file")
 
-            decryptFile(tempEncrypted, tempZip)
+            decryptFile(tempEncrypted, tempZip, password)
             extractBackupZip(tempZip)
         } finally {
             tempEncrypted.delete()
@@ -139,17 +140,20 @@ class BackupManager(
         }
     }
 
-    private fun encryptFile(input: File, output: OutputStream) {
+    private fun encryptFile(input: File, output: OutputStream, password: String) {
+        val salt = ByteArray(SALT_SIZE_BYTES)
+        SecureRandom().nextBytes(salt)
+        
+        val key = deriveKey(password, salt)
         val cipher = Cipher.getInstance(TRANSFORMATION)
-        val key = getOrCreateKey()
-        // Do not provide IV manually when using AndroidKeyStore with default settings.
-        // It will generate a random IV for us.
         cipher.init(Cipher.ENCRYPT_MODE, key)
         val iv = cipher.iv
 
         output.write(MAGIC)
         output.write(iv.size)
         output.write(iv)
+        output.write(salt.size)
+        output.write(salt)
 
         CipherOutputStream(output, cipher).use { cipherOut ->
             FileInputStream(input).use { fileIn ->
@@ -158,7 +162,7 @@ class BackupManager(
         }
     }
 
-    private fun decryptFile(input: File, output: File) {
+    private fun decryptFile(input: File, output: File, password: String) {
         FileInputStream(input).use { fileIn ->
             val magic = ByteArray(MAGIC.size)
             fileIn.read(magic)
@@ -168,8 +172,13 @@ class BackupManager(
             val iv = ByteArray(ivSize)
             fileIn.read(iv)
 
+            val saltSize = fileIn.read()
+            val salt = ByteArray(saltSize)
+            fileIn.read(salt)
+
+            val key = deriveKey(password, salt)
             val cipher = Cipher.getInstance(TRANSFORMATION)
-            cipher.init(Cipher.DECRYPT_MODE, getOrCreateKey(), javax.crypto.spec.GCMParameterSpec(128, iv))
+            cipher.init(Cipher.DECRYPT_MODE, key, GCMParameterSpec(128, iv))
 
             javax.crypto.CipherInputStream(fileIn, cipher).use { cipherIn ->
                 FileOutputStream(output).use { fileOut ->
@@ -177,6 +186,13 @@ class BackupManager(
                 }
             }
         }
+    }
+
+    private fun deriveKey(password: String, salt: ByteArray): SecretKey {
+        val factory = SecretKeyFactory.getInstance("PBKDF2WithHmacSHA256")
+        val spec = PBEKeySpec(password.toCharArray(), salt, ITERATIONS, KEY_SIZE_BITS)
+        val tmp = factory.generateSecret(spec)
+        return SecretKeySpec(tmp.encoded, "AES")
     }
 
     private fun extractBackupZip(zipFile: File) {
@@ -203,28 +219,11 @@ class BackupManager(
         }
     }
 
-    private fun getOrCreateKey(): SecretKey {
-        val keyStore = KeyStore.getInstance(KEYSTORE_TYPE).apply { load(null) }
-        (keyStore.getKey(KEY_ALIAS, null) as? SecretKey)?.let { return it }
-
-        val generator = KeyGenerator.getInstance(KeyProperties.KEY_ALGORITHM_AES, KEYSTORE_TYPE)
-        val spec = KeyGenParameterSpec.Builder(
-            KEY_ALIAS,
-            KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
-        )
-            .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-            .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-            .setKeySize(256)
-            .build()
-
-        generator.init(spec)
-        return generator.generateKey()
-    }
-
     companion object {
-        private const val KEYSTORE_TYPE = "AndroidKeyStore"
-        private const val KEY_ALIAS = "inventory_backup_key"
-        private val MAGIC = byteArrayOf('I'.code.toByte(), 'M'.code.toByte(), 'B'.code.toByte(), 'K'.code.toByte(), 1)
+        private val MAGIC = byteArrayOf('I'.code.toByte(), 'M'.code.toByte(), 'B'.code.toByte(), 'K'.code.toByte(), 2)
         private const val TRANSFORMATION = "AES/GCM/NoPadding"
+        private const val ITERATIONS = 10000
+        private const val KEY_SIZE_BITS = 256
+        private const val SALT_SIZE_BYTES = 16
     }
 }

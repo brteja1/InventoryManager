@@ -267,13 +267,13 @@ class InventoryViewModel(
         backup.value = backup.value.copy(message = null)
     }
 
-    fun exportEncryptedBackup() {
+    fun exportEncryptedBackup(password: String) {
         if (backup.value.isExporting) return
 
         viewModelScope.launch {
             backup.value = backup.value.copy(isExporting = true, message = null)
             try {
-                val result = backupManager.exportEncryptedBackup()
+                val result = backupManager.exportEncryptedBackup(password)
                 backup.value = backup.value.copy(
                     isExporting = false,
                     message = "Encrypted backup saved: ${result.displayName}",
@@ -287,13 +287,13 @@ class InventoryViewModel(
         }
     }
 
-    fun importEncryptedBackup(uri: Uri) {
+    fun importEncryptedBackup(uri: Uri, password: String) {
         if (backup.value.isImporting || backup.value.isExporting) return
 
         viewModelScope.launch {
             backup.value = backup.value.copy(isImporting = true, message = null)
             try {
-                backupManager.importEncryptedBackup(uri)
+                backupManager.importEncryptedBackup(uri, password)
                 backup.value = backup.value.copy(
                     isImporting = false,
                     message = "Backup imported successfully.",

@@ -45,6 +45,8 @@ import androidx.compose.material.icons.outlined.PhotoLibrary
 import androidx.compose.material.icons.outlined.Place
 import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Upload
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.AssistChip
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -90,7 +92,9 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
@@ -110,18 +114,43 @@ import kotlin.math.absoluteValue
 fun InventoryManagerApp(
     viewModel: InventoryViewModel,
     onLockApp: () -> Unit,
-    onExportBackup: () -> Unit,
-    onImportBackup: (Uri) -> Unit,
     onClearExportMessage: () -> Unit,
 ) {
     val uiState by viewModel.uiState.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+
+    var showExportPasswordDialog by remember { mutableStateOf(false) }
+    var pendingImportUri by remember { mutableStateOf<Uri?>(null) }
 
     LaunchedEffect(uiState.backupMessage) {
         uiState.backupMessage?.let {
             snackbarHostState.showSnackbar(it)
             onClearExportMessage()
         }
+    }
+
+    if (showExportPasswordDialog) {
+        PasswordDialog(
+            title = "Export Backup",
+            message = "Set a password to encrypt your backup. You will need this password to restore your data on any device.",
+            onConfirm = { password ->
+                showExportPasswordDialog = false
+                viewModel.exportEncryptedBackup(password)
+            },
+            onDismiss = { showExportPasswordDialog = false }
+        )
+    }
+
+    pendingImportUri?.let { uri ->
+        PasswordDialog(
+            title = "Import Backup",
+            message = "Enter the password used to encrypt this backup file.",
+            onConfirm = { password ->
+                pendingImportUri = null
+                viewModel.importEncryptedBackup(uri, password)
+            },
+            onDismiss = { pendingImportUri = null }
+        )
     }
 
     if (uiState.editor.isOpen) {
@@ -148,11 +177,59 @@ fun InventoryManagerApp(
             onCreateItem = viewModel::startCreating,
             onEditItem = viewModel::startEditing,
             onLockApp = onLockApp,
-            onExportBackup = onExportBackup,
-            onImportBackup = onImportBackup,
+            onExportBackup = { showExportPasswordDialog = true },
+            onImportBackup = { uri -> pendingImportUri = uri },
             snackbarHostState = snackbarHostState,
         )
     }
+}
+
+@Composable
+private fun PasswordDialog(
+    title: String,
+    message: String,
+    onConfirm: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    var password by remember { mutableStateOf("") }
+    var passwordVisible by remember { mutableStateOf(false) }
+
+    androidx.compose.material3.AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(message, style = MaterialTheme.typography.bodyMedium)
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Password") },
+                    modifier = Modifier.fillMaxWidth(),
+                    singleLine = true,
+                    visualTransformation = if (passwordVisible) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = {
+                        val image = if (passwordVisible) Icons.Outlined.Visibility else Icons.Outlined.VisibilityOff
+                        IconButton(onClick = { passwordVisible = !passwordVisible }) {
+                            Icon(image, contentDescription = null)
+                        }
+                    }
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(password) },
+                enabled = password.isNotBlank()
+            ) {
+                Text("Confirm")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("Cancel")
+            }
+        }
+    )
 }
 
 @OptIn(ExperimentalMaterial3Api::class)

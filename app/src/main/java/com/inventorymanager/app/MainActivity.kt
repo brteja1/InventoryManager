@@ -42,8 +42,6 @@ class MainActivity : FragmentActivity() {
                     InventoryManagerApp(
                         viewModel = inventoryViewModel,
                         onLockApp = { unlocked = false },
-                        onExportBackup = inventoryViewModel::exportEncryptedBackup,
-                        onImportBackup = inventoryViewModel::importEncryptedBackup,
                         onClearExportMessage = inventoryViewModel::clearBackupMessage,
                     )
                 }
